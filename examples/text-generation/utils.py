@@ -721,9 +721,9 @@ def initialize_model(args, logger):
     setup_env(args)
     setup_device(args)
     set_seed(args.seed)
-    cache_dir = get_repo_root(args.model_name_or_path, local_rank=args.local_rank, token=args.token)
+    cache_dir = get_repo_root(args.model_name_or_path, args.local_rank, args.token, logger)
     if args.assistant_model is not None:
-        get_repo_root(args.assistant_model, local_rank=args.local_rank, token=args.token)
+        get_repo_root(args.assistant_model, args.local_rank, args.token, logger)
     use_deepspeed = args.world_size > 0
     if use_deepspeed or args.bf16:
         model_dtype = torch.bfloat16

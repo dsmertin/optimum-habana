@@ -3,12 +3,13 @@ import os
 from pathlib import Path
 
 import torch
-from huggingface_hub import list_repo_files, snapshot_download
+from huggingface_hub import list_repo_files, snapshot_download, errors
+import huggingface_hub.errors as hf_hub_errors
 from transformers import modeling_utils
 from transformers.utils import is_offline_mode
 
 
-def get_repo_root(model_name_or_path, local_rank=-1, token=None):
+def get_repo_root(model_name_or_path, local_rank=-1, token=None, logger=None):
     """
     Downloads the specified model checkpoint and returns the repository where it was downloaded.
     """
@@ -33,14 +34,27 @@ def get_repo_root(model_name_or_path, local_rank=-1, token=None):
 
         # Download only on first process
         if local_rank in [-1, 0]:
-            cache_dir = snapshot_download(
-                model_name_or_path,
-                local_files_only=is_offline_mode(),
-                cache_dir=os.getenv("TRANSFORMERS_CACHE", None),
-                allow_patterns=allow_patterns,
-                max_workers=16,
-                token=token,
-            )
+            try:
+                cache_dir = snapshot_download(
+                    model_name_or_path,
+                    local_files_only=is_offline_mode(),
+                    cache_dir=os.getenv("TRANSFORMERS_CACHE", None),
+                    allow_patterns=allow_patterns,
+                    max_workers=16,
+                    token=token,
+                )
+            except hf_hub_errors.HfHubHTTPError as e:
+                logger.warning("There was an exception thrown during model downloading.\n"
+                               "Another attempt will be made with `force_download=True` option.")
+                cache_dir = snapshot_download(
+                    model_name_or_path,
+                    cache_dir=os.getenv("TRANSFORMERS_CACHE", None),
+                    allow_patterns=allow_patterns,
+                    max_workers=16,
+                    token=token,
+                    force_download=True
+                )
+
             if local_rank == -1:
                 # If there is only one process, then the method is finished
                 return cache_dir
@@ -50,12 +64,11 @@ def get_repo_root(model_name_or_path, local_rank=-1, token=None):
             torch.distributed.barrier()
 
         return snapshot_download(
-            model_name_or_path,
-            local_files_only=is_offline_mode(),
-            cache_dir=os.getenv("TRANSFORMERS_CACHE", None),
-            allow_patterns=allow_patterns,
-            token=token,
-        )
+                model_name_or_path,
+                cache_dir=os.getenv("TRANSFORMERS_CACHE", None),
+                allow_patterns=allow_patterns,
+                token=token,
+            )
 
 
 def get_checkpoint_files(model_name_or_path, local_rank, token=None):
