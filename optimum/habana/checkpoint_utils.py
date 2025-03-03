@@ -8,6 +8,44 @@ import huggingface_hub.errors as hf_hub_errors
 from transformers import modeling_utils
 from transformers.utils import is_offline_mode
 
+def snapshot_download_safe(
+    model_name_or_path, 
+    local_files_only=False,
+    cache_dir=None,
+    allow_patterns=None,
+    max_workers=8,
+    token=None,
+    logger=None,
+) -> str:
+    result = ""
+    try:
+        result = snapshot_download(
+            model_name_or_path,
+            local_files_only=local_files_only,
+            cache_dir=cache_dir,
+            allow_patterns=allow_patterns,
+            max_workers=max_workers,
+            token=token,
+        )
+    # For the sporadic `requests.exceptions.HTTPError: 416 Client Error: Requested Range Not Satisfiable for url: X`
+    # OSError: Consistency check failed: file should be of size X but has size Y.
+    #   This is usually due to network issues while downloading the file. Please retry with `force_download=True`.
+    except (hf_hub_errors.HfHubHTTPError, OSError) as e:
+        if type(e) is OSError and not 'force_download=True' in str(e):
+            raise e
+        if logger:
+            logger.warning("There was an exception thrown during model downloading.\n"
+                        "Another attempt will be made with `force_download=True` option.")
+        result = snapshot_download(
+            model_name_or_path,
+            local_files_only=local_files_only,
+            cache_dir=cache_dir,
+            allow_patterns=allow_patterns,
+            max_workers=max_workers,
+            token=token,
+            force_download=True
+        )
+    return result
 
 def get_repo_root(model_name_or_path, local_rank=-1, token=None, logger=None):
     """
@@ -34,26 +72,15 @@ def get_repo_root(model_name_or_path, local_rank=-1, token=None, logger=None):
 
         # Download only on first process
         if local_rank in [-1, 0]:
-            try:
-                cache_dir = snapshot_download(
-                    model_name_or_path,
-                    local_files_only=is_offline_mode(),
-                    cache_dir=os.getenv("TRANSFORMERS_CACHE", None),
-                    allow_patterns=allow_patterns,
-                    max_workers=16,
-                    token=token,
-                )
-            except hf_hub_errors.HfHubHTTPError as e:
-                logger.warning("There was an exception thrown during model downloading.\n"
-                               "Another attempt will be made with `force_download=True` option.")
-                cache_dir = snapshot_download(
-                    model_name_or_path,
-                    cache_dir=os.getenv("TRANSFORMERS_CACHE", None),
-                    allow_patterns=allow_patterns,
-                    max_workers=16,
-                    token=token,
-                    force_download=True
-                )
+            cache_dir = snapshot_download_safe(
+                model_name_or_path,
+                local_files_only=is_offline_mode(),
+                cache_dir=os.getenv("TRANSFORMERS_CACHE", None),
+                allow_patterns=allow_patterns,
+                max_workers=16,
+                token=token,
+                logger=logger
+            )
 
             if local_rank == -1:
                 # If there is only one process, then the method is finished
@@ -63,11 +90,12 @@ def get_repo_root(model_name_or_path, local_rank=-1, token=None, logger=None):
         if torch.distributed.is_initialized():
             torch.distributed.barrier()
 
-        return snapshot_download(
+        return snapshot_download_safe(
                 model_name_or_path,
                 cache_dir=os.getenv("TRANSFORMERS_CACHE", None),
                 allow_patterns=allow_patterns,
                 token=token,
+                logger=logger
             )
 
 
